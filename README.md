@@ -1,127 +1,99 @@
 # SRCF Pregeometry Lab
 
-Исследования **Self-Referential Closure Field**: координатно-свободные relation-сети, где модель не получает координаты/объекты как основу, а учится самоприменением формировать устойчивые basin-состояния.
+Эксперименты с **Self-Referential Closure Field (SRCF)** — координатно-свободной моделью для матриц отношений.
 
-## Главная идея
+## Коротко
 
-Обычная сеть:
-
-```text
-данные -> признаки -> класс/ответ
-```
-
-SRCF:
+SRCF не получает координаты и не обучается на метках аномалий. Он берёт матрицу отношений `R[i,j,c]`, переводит её в скрытое состояние и несколько раз применяет один и тот же оператор к самому состоянию:
 
 ```text
-relation tensor R[i,j,c]
--> encoder
--> один и тот же learned closure-оператор применяется к своему состоянию несколько раз
--> near-возмущения должны стягиваться в один basin
--> far-состояния должны оставаться различимыми
+R0 -> H0 -> F(H0) -> F(F(H0)) -> ... -> H*
 ```
 
-Никаких supervised labels на этапе pretrain нет.
+Цель обучения без labels:
 
-## Файлы
+- малое повреждение того же состояния должно сходиться в тот же basin;
+- другое состояние должно оставаться отличимым;
+- финальное состояние должно быть устойчивым;
+- после шума оно должно восстанавливаться;
+- модель не должна схлопываться в константу.
 
-- `self_referential_closure_field_v6_basin_dna.py` — основной SRCF trainer: synthetic + real DNA 3-mer relation states.
-- `srcf_benchmark_v6_real.py` — hard synthetic anomaly + real DNA benchmark.
-- `pregeometric_self_query_field_v2.py` — supervised coordinate-free prototype.
+## Главные файлы
+
+- `self_referential_closure_field_v6_basin_dna.py` — основное обучение SRCF на synthetic/DNA relation matrices.
+- `srcf_benchmark_v6_real.py` — synthetic + real DNA benchmark.
+- `srcf_realdata_benchmark_v1.py` — новый реальный benchmark на встроенных sklearn-датасетах без синтетики.
+- `pregeometric_self_query_field_v2.py` — supervised toy-прототип координатно-свободных self-query operators.
 - `field_archs_v2_diagnostic.py` — диагностические демо/baseline.
 
-## Что уже получилось
+## Что уже видно
 
-DNA self-supervised run на E. coli 200k bases:
+1. На DNA k-mer relation states SRCF показывает реальную basin dynamics без labels: `contract < 1`, `h_contract < 1`, `move > 0`, кривая шагов убывает, операторы не схлопываются.
+2. На synthetic hard anomalies closure-сигнал сильный, но benchmark искусственный.
+3. На real DNA пока нет уверенной победы над простыми baseline по всем типам аномалий.
+4. Поэтому добавлен новый real-data benchmark: breast cancer, digits, wine. Он нужен, чтобы быстро понять, где closure-score даёт практический выигрыш против обычных методов.
 
-- `contract` держится ниже 1: near-состояния стягиваются.
-- `h_contract` ниже 1: стягивается не только descriptor, но и hidden-state.
-- `move` высокий: это не ленивый identity.
-- `curve` убывает: самоприменение сходится.
-- `eff_ops` около 7.6-7.9: операторы не схлопнулись в один.
-- `perm` около 1e-6: нет скрытой зависимости от порядка узлов.
+## Реальный benchmark без синтетики
 
-См. `results/summary_seed.md`.
-
-## Что было исправлено в v6 benchmark
-
-Старый anomaly score ошибочно считал:
-
-```text
-аномалия = высокая instability
-```
-
-Но hard anomaly показал обратный режим:
-
-```text
-часть аномалий = слишком стабильные / over-closed / слишком простые
-```
-
-Поэтому v6 добавляет:
-
-- `closure_distance` — обычное отклонение от нормы.
-- `closure_typicality` — ловит и слишком высокое, и слишком низкое отклонение.
-- `closure_energy_typicality` — проверяет typical set, а не только расстояние от центра.
-- real DNA benchmark против baseline:
-  - `embedding_dist`
-  - `raw_summary_dist`
-  - `raw_flat_dist`
-  - `kmer_freq_dist`
-
-## Команды запуска
-
-### 1. DNA training
+Запуск:
 
 ```bash
-python -u self_referential_closure_field_v6_basin_dna.py \
-  --device cuda --amp fp16 \
-  --steps 300 --batch-size 4 --eval-batch-size 4 \
-  --data dna --dna-bases 200000 --dna-window 2048 --kmer 3 \
-  --dim 48 --ops 8 --iters 6 --eval-every 25 \
-  --metrics-csv results/srcf_v6_dna_metrics.csv \
-  --save-path ./srcf_v6_dna.pt \
-  | tee srcf_v6_dna.log
+bash scripts/run_real_bench.sh
 ```
 
-### 2. Synthetic hard anomaly benchmark
+Или явно:
 
 ```bash
-python -u srcf_benchmark_v6_real.py \
+python -u srcf_realdata_benchmark_v1.py \
   --device cuda --amp fp16 \
-  --task anomaly --pretrain-steps 150 \
-  --batch 8 --eval-batch 8 \
-  --n 32 --dim 48 --ops 8 --iters 6 \
-  --results-csv results/summary.csv \
-  | tee srcf_benchmark_v6_anomaly.log
+  --dataset all \
+  --pretrain-steps 200 \
+  --batch 16 --eval-batch 32 \
+  --dim 48 --ops 8 --iters 6 \
+  --results-csv results/realdata_summary.csv \
+  | tee srcf_realdata_v1.log
 ```
 
-### 3. Real DNA benchmark
+Датасеты:
 
-```bash
-python -u srcf_benchmark_v6_real.py \
-  --device cuda --amp fp16 \
-  --task dna --pretrain-steps 150 \
-  --batch 4 --eval-batch 4 \
-  --n 64 --dim 48 --ops 8 --iters 6 \
-  --dna-bases 200000 --dna-window 2048 --kmer 3 \
-  --results-csv results/summary.csv \
-  | tee srcf_benchmark_v6_dna.log
-```
+- `breast_cancer`: benign = normal, malignant = anomaly.
+- `digits`: выбранная цифра = normal, остальные = anomaly.
+- `wine`: выбранный класс = normal, остальные = anomaly.
 
-## Как читать AUROC
+Сравнение:
 
-Benchmark печатает:
+- `closure_typicality` — двусторонняя типичность closure features.
+- `closure_instability` — простая нестабильность/восстановление.
+- `embedding_dist` — расстояние SRCF descriptor до нормального центра.
+- `raw_dist` — расстояние исходных признаков до центра нормального класса.
+- `pca_recon` — ошибка восстановления PCA, обученной на normal.
+- `isolation_forest` — sklearn IsolationForest, обученный на normal.
+
+## Как читать метрики
+
+Для training:
+
+- `contract < 1` — near-состояния стягиваются.
+- `h_contract < 1` — hidden-state тоже стягивается.
+- `far_keep >= 0.7` — другие состояния не схлопываются слишком сильно.
+- `move > 0.1` — модель не identity.
+- `state_var` не должен падать к нулю.
+- `curve start -> end` должна убывать.
+
+Для benchmark:
+
+- `high` — обычное направление score: выше = аномальнее.
+- `low` — обратное направление.
+- `best` — есть ли разделимость вообще.
+
+Практически нужен высокий `high`. Если высокий только `best`, значит сигнал есть, но его надо калибровать.
+
+## Что считать успехом
+
+SRCF становится реально полезным, если на реальном benchmark:
 
 ```text
-high = чем выше score, тем аномальнее
-low  = обратное направление
-best = есть ли разделимость вообще
+closure_typicality AUROC >= raw_dist / PCA / IsolationForest / embedding_dist
 ```
 
-Цель:
-
-```text
-closure_typicality high > embedding_dist high
-closure_typicality high > raw_summary_dist high
-```
-
-Если `best` высокий, а `high` низкий — сигнал есть, но направление score надо калибровать.
+или если он явно выигрывает хотя бы на одном типе данных, где обычные расстояния проваливаются.

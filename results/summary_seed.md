@@ -1,8 +1,9 @@
 # Seed results notes
 
-Результаты пишем кратко. `.log` и `.pt` не коммитим.
+Формат для коротких результатов:
 
-| date | file | data | steps | contract | h_contract | far_keep | move | state_var | eff_ops | notes |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
-| 2026-06-22 | self_referential_closure_field_v5_basin_dna.py | DNA E.coli 3-mer | 300 | 0.548 | 0.746 | 0.791 | 0.409 | 0.357 | 7.88 | basin contraction работает; нужен real DNA benchmark |
-| 2026-06-22 | srcf_benchmark_v5_hard.py | synthetic hard anomaly | 150 pretrain | - | - | - | - | - | - | closure best ~0.976, но high/low инверсия; v6 чинит scoring |
+| date | experiment | dataset | steps | key metric | result | conclusion |
+|---|---|---|---:|---|---:|---|
+| 2026-06-22 | SRCF v5 DNA train | E.coli k=3 | 300 | contract/h_contract/far_keep/move | 0.55 / 0.75 / 0.79 / 0.409 | basin dynamics работает |
+| 2026-06-22 | SRCF v6 synthetic anomaly | synthetic hard | 150 | closure best | 1.000 | сильный, но synthetic слишком лёгкий |
+| 2026-06-22 | SRCF v6 real DNA | E.coli anomalies | 150 | closure best overall | 0.6785 | пока не бьёт raw/kmer baseline |
