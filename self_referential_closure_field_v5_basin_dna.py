@@ -789,11 +789,18 @@ def train(args) -> None:
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scaler = torch.amp.GradScaler("cuda", enabled=(args.device.startswith("cuda") and args.amp == "fp16"))
 
-    print("SRCF-v4 basin-contractive hard/DNA self-referential closure field / no supervised labels")
+    print("SRCF-v5 basin-contractive hard/DNA self-referential closure field / no supervised labels")
     print(f"device={args.device} amp={args.amp} data={args.data} n={sampler.n} rel_dim={args.rel_dim} dim={args.dim} ops={args.ops} iters={args.iters}")
     print(f"contractive/memsafe: checkpoint_ops={args.checkpoint_ops} detach_pairs={args.detach_pairs} batch={args.batch_size} eval_batch={args.eval_batch_size}")
     print(f"params={sum(p.numel() for p in model.parameters()):,}")
     print("metrics: out_same low, out_far high, contract<1 and h_contract<1, far_keep~>=0.7, move>0, fixed/recovery low, curve should decay, perm~0")
+
+    csv_file = None
+    csv_writer = None
+    if args.metrics_csv:
+        os.makedirs(os.path.dirname(args.metrics_csv) or ".", exist_ok=True)
+        csv_file = open(args.metrics_csv, "w", newline="", encoding="utf-8")
+        print(f"metrics csv: {args.metrics_csv}")
 
     # frozen/random model baseline before any training
     m0 = evaluate(model, sampler, args, n_override=(args.n if args.data != "dna" else None))
@@ -860,6 +867,7 @@ def train(args) -> None:
         print(f"saved: {args.save_path}")
     if csv_file is not None:
         csv_file.close()
+        print(f"metrics saved: {args.metrics_csv}")
 
 
 # ------------------------- args -------------------------

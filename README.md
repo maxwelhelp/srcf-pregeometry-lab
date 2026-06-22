@@ -1,48 +1,37 @@
 # SRCF Pregeometry Lab
 
-Self-Referential Closure Fields (SRCF) and coordinate-free relation learning experiments.
+Self-Referential Closure Fields (SRCF): coordinate-free relation tensors, recurrent self-application, and basin-contraction / closure diagnostics.
 
-Core idea:
+## Key files
 
-- coordinates are not inputs; relation tensors are the substrate;
-- the same learned operator is applied to its own state repeatedly;
-- near perturbations should converge into the same basin;
-- unrelated states should stay distinct;
-- geometry/topology is treated as an output/hypothesis, not as a required prior.
-
-## Main files
-
-- `self_referential_closure_field_v5_basin_dna.py` — main SRCF model/trainer, synthetic + DNA k-mer relation states, CSV metrics.
-- `srcf_benchmark_v4_hard.py` — hard/calibrated anomaly and DNA benchmarks.
+- `self_referential_closure_field_v5_basin_dna.py` — main SRCF training file. Synthetic + DNA k-mer relation states. Writes CSV metrics.
+- `srcf_benchmark_v4_hard.py` — hard calibrated anomaly/DNA benchmarks with calibrated closure scores and baselines.
 - `pregeometric_self_query_field_v2.py` — supervised coordinate-free self-query prototype.
 - `field_archs_v2_diagnostic.py` — diagnostic demos/baselines.
 
-## Current status
+## Current rules for judging runs
 
-See `docs/STATUS.md` and `results/summary_seed.md`.
+Training is good only if these hold together:
 
-Main conclusion so far:
+- `contract < 1.0`
+- `h_contract < 1.0`
+- `far_keep >= 0.75-0.80`
+- `move > 0.12`
+- curve decays over iterations
+- `state_var` does not collapse, roughly `>= 0.20`
+- `eff_ops` does not collapse into 1-2 ops
+- `perm ~ 1e-6`
 
-- PG-SQF supervised toy benchmark works, but is too easy.
-- SRCF-v4/v5 DNA training shows real basin contraction (`contract < 1`, `h_contract < 1`) without labels.
-- Old anomaly benchmarks were too easy or incorrectly scored; `embedding_dist=1.0` means the synthetic anomaly set was not hard enough.
-- New benchmark uses calibrated closure metrics and harder near-normal anomalies.
+Benchmark is interesting only if calibrated closure beats simple baselines:
 
-## Quick commands
+- `calibrated_closure > embedding_dist`
+- `calibrated_closure > raw_summary_dist`
 
-Synthetic SRCF training:
+If `embedding_dist == 1.0`, the anomaly task is still too easy.
 
-```bash
-python -u self_referential_closure_field_v5_basin_dna.py \
-  --device cuda --amp fp16 \
-  --steps 300 --batch-size 8 --eval-batch-size 8 \
-  --data synthetic --n 32 --ood-n 48 \
-  --dim 48 --ops 8 --iters 6 --eval-every 25 \
-  --metrics-csv results/srcf_v5_synth_metrics.csv \
-  --save-path ./srcf_v5_synth.pt | tee srcf_v5_synth.log
-```
+## Commands
 
-DNA SRCF training:
+### DNA training
 
 ```bash
 python -u self_referential_closure_field_v5_basin_dna.py \
@@ -54,7 +43,19 @@ python -u self_referential_closure_field_v5_basin_dna.py \
   --save-path ./srcf_v5_dna.pt | tee srcf_v5_dna.log
 ```
 
-Hard anomaly benchmark:
+### Synthetic training
+
+```bash
+python -u self_referential_closure_field_v5_basin_dna.py \
+  --device cuda --amp fp16 \
+  --steps 300 --batch-size 8 --eval-batch-size 8 \
+  --data synthetic --n 32 --ood-n 48 \
+  --dim 48 --ops 8 --iters 6 --eval-every 25 \
+  --metrics-csv results/srcf_v5_synth_metrics.csv \
+  --save-path ./srcf_v5_synth.pt | tee srcf_v5_synth.log
+```
+
+### Hard anomaly benchmark
 
 ```bash
 python -u srcf_benchmark_v4_hard.py \
@@ -65,7 +66,7 @@ python -u srcf_benchmark_v4_hard.py \
   --results-csv results/summary.csv | tee srcf_benchmark_v4_anomaly.log
 ```
 
-DNA benchmark:
+### DNA benchmark
 
 ```bash
 python -u srcf_benchmark_v4_hard.py \

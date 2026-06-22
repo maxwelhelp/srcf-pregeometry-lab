@@ -1,0 +1,7 @@
+task,metric,value,n,dim,ops,iters,pretrain_steps,data
+anomaly,calibrated_closure,0.025513,32,48,8,6,150,synthetic
+anomaly,instability,0.018860,32,48,8,6,150,synthetic
+anomaly,recovery,0.019470,32,48,8,6,150,synthetic
+anomaly,embedding_dist,0.375488,32,48,8,6,150,synthetic
+anomaly,raw_summary_dist,0.824809,32,48,8,6,150,synthetic
+anomaly,random,0.475728,32,48,8,6,150,synthetic
