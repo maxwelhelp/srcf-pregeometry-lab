@@ -1,29 +1,52 @@
-# SRCF status
+# STATUS / текущие выводы
 
-Current fix: v5.2 model + v5 hard benchmark.
+## Последний DNA training run
 
-## Why this patch exists
+Файл: `results/srcf_v5_dna_metrics.csv`
 
-Previous v5 model crashed in DNA mode with `NameError: csv_file is not defined`. Fixed.
+Последняя точка:
 
-Previous hard anomaly benchmark reported very low calibrated AUROC. This exposed two issues:
+| step | contract | h_contract | far_keep | move | state_var | desc_var | eff_ops | perm |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 300 | 0.548 | 0.746 | 0.791 | 0.409 | 0.357 | 1.23e-04 | 7.88 | 1.4e-06 |
 
-1. v4 benchmark mixed batch-level intrinsic metrics into per-sample anomaly features.
-2. Some anomalies are not high-instability; they are over-stable / over-contractive. Therefore the benchmark now reports high-tail, low-tail and best separability AUROC.
+Итоги по run:
 
-## What matters
+- min contract: `0.423`
+- min h_contract: `0.678`
+- min far_keep: `0.561`
+- max move: `0.409`
+- min state_var: `0.240`
+- max eff_ops: `7.91`
 
-Training:
-- `contract < 1`
-- `h_contract < 1`
-- `far_keep >= 0.75`
-- `move > 0.12`
-- `curve` decays
-- `state_var` should not collapse
+Интерпретация:
 
-Benchmark:
-- `high` means anomaly score high = anomaly.
-- `low` means inverted direction; anomaly score low = anomaly.
-- `best` is separability only, useful for research but not a deployable unsupervised anomaly score by itself.
+- `contract < 1` и `h_contract < 1` — near DNA relation states реально стягиваются в basin.
+- `move ~0.4` — это не identity.
+- `eff_ops ~7.8` — операторы не схлопнулись.
+- `perm ~1e-6` — нет зависимости от скрытого порядка узлов.
+- `far_keep` иногда падает, но не до collapse; это надо мониторить.
 
-Goal: make `calibrated_closure_high` beat `embedding_dist_high` and `raw_summary_dist_high` on hard anomalies. If only `low/best` is high, closure dynamics separates the data but the anomaly scoring direction is not solved yet.
+## Старый hard anomaly benchmark v5
+
+Главные результаты:
+
+| metric | high | low | best |
+|---|---:|---:|---:|
+| calibrated_closure | 0.024 | 0.976 | 0.976 |
+| instability | 0.019 | 0.981 | 0.981 |
+| recovery | 0.019 | 0.981 | 0.981 |
+| embedding_dist | 0.375 | 0.625 | 0.625 |
+| raw_summary_dist | 0.825 | 0.175 | 0.825 |
+
+Вывод:
+
+- closure signal сильный (`best ~0.98`), но направление было инвертировано.
+- Это означает, что часть hard anomalies являются не chaotic/unstable, а **over-closed / suspiciously stable**.
+- v6 benchmark добавляет typicality-score, который должен ловить оба направления.
+
+## Следующее
+
+1. Запустить `srcf_benchmark_v6_real.py --task anomaly`.
+2. Запустить `srcf_benchmark_v6_real.py --task dna`.
+3. Сравнить `closure_typicality` против `embedding_dist`, `raw_summary_dist`, `raw_flat_dist`, `kmer_freq_dist`.
