@@ -169,6 +169,10 @@ closure_profile = {
   state_variance,
   relation_channel_importance,
   changed_edges_after_closure,
+  recovered_edges,
+  missing_edges,
+  bridge_edges,
+  subsystem_membership,
   operator_usage,
   curve_start,
   curve_end,
@@ -180,6 +184,10 @@ closure_profile = {
 
 Этот descriptor можно отдавать дальше:
 
+- graph pretraining pipeline;
+- graph classifier / edge predictor;
+- relation repair / denoising module;
+- subsystem detector;
 - agent planner;
 - RAG router;
 - code inspector;
@@ -190,9 +198,255 @@ closure_profile = {
 
 ## 6. Где SRCF даст максимальную пользу
 
-### 6.1. Агент: проверка смысла задачи / вопроса
+### 6.1. Self-supervised pretraining для графов и систем отношений
 
-Самое сильное направление.
+Это, возможно, главное практическое применение SRCF.
+
+Обычные GNN часто требуют labels:
+
+```text
+graph -> class
+node  -> class
+edge  -> class
+```
+
+SRCF можно обучать без labels:
+
+```text
+graph / relation matrix -> stable closure representation
+```
+
+Практическая схема:
+
+```text
+много неразмеченных графов
+-> SRCF учит basin / closure representation
+-> сверху маленький classifier / regressor / predictor
+```
+
+SRCF не обязан сразу побеждать supervised GNN на размеченном датасете. Его ценность в другом:
+
+```text
+он может предобучаться на больших объемах неразмеченных relation data.
+```
+
+Потом closure representation можно использовать для:
+
+- graph classification;
+- node classification;
+- link prediction;
+- edge recovery;
+- graph-level regression;
+- subsystem detection;
+- graph similarity;
+- graph retrieval;
+- graph clustering;
+- graph foundation pretraining для relation systems.
+
+Где применять:
+
+```text
+молекулы
+белковые взаимодействия
+графы знаний
+социальные графы
+транзакционные графы
+инфраструктурные графы
+нейронные connectome-графы
+графы зависимостей
+кодовые dependency graphs
+сервисные dependency graphs
+workflow graphs
+agent memory graphs
+scientific claim graphs
+```
+
+Ключевой тезис:
+
+```text
+SRCF = self-supervised pretraining objective для графов,
+где цель не mask-token и не contrastive только,
+а восстановление устойчивого relation basin.
+```
+
+Проверка:
+
+```text
+1. Берем много графов без labels.
+2. Строим R[i,j,c]: adjacency, edge type, distance, direction, motif, attributes.
+3. Обучаем SRCF: near corruption -> same basin, far graph -> separate basin.
+4. Извлекаем closure_profile + H* descriptor.
+5. Проверяем downstream: graph classification / link prediction / edge recovery.
+6. Сравниваем:
+   - raw graph stats;
+   - node2vec / graph2vec;
+   - simple GNN autoencoder;
+   - contrastive GNN;
+   - SRCF descriptor;
+   - GNN + SRCF descriptor.
+```
+
+Что считать успехом:
+
+```text
+SRCF не обязательно должен быть лучшим standalone.
+Достаточно, если SRCF descriptor добавляет сигнал поверх обычных graph embeddings.
+```
+
+### 6.2. Denoising / repair систем отношений
+
+Это очень сильное применение, потому что оно напрямую совпадает с тем, чему SRCF уже учится.
+
+SRCF делает динамику:
+
+```text
+R0 -> H0 -> H* -> устойчивое состояние
+```
+
+Поэтому его можно использовать как relation denoiser / repair engine:
+
+```text
+испорченный граф -> восстановленная согласованная структура
+шумные связи -> очищенные связи
+пропущенные связи -> возможное восстановление
+сломанная матрица -> самосогласованная версия
+```
+
+Это ценнее, чем anomaly detection, потому что выход не просто score, а кандидат на исправление / восстановление.
+
+Примеры:
+
+- восстановление пропущенных ребер в графе;
+- исправление шумной correlation matrix;
+- очистка сенсорной сети;
+- восстановление PPI / биологических взаимодействий;
+- очистка dependency graph;
+- восстановление knowledge graph;
+- исправление service dependency graph после неполных логов;
+- восстановление code architecture graph после неполного static analysis;
+- восстановление agent memory graph после устаревших или противоречивых memories.
+
+Почему это логично:
+
+```text
+SRCF уже обучается:
+near corruption -> same basin
+state perturbation -> recovery
+fixed point -> stable representation
+```
+
+Значит следующий шаг — не просто измерять closure score, а декодировать из H* восстановленную relation structure.
+
+Нужный модуль:
+
+```text
+R0 -> encoder -> H* -> decoder -> R_repaired
+```
+
+Loss для repair:
+
+```text
+R_clean -> corrupt(R_clean) = R_noisy
+SRCF(R_noisy) -> H*
+decoder(H*) -> R_repaired
+minimize distance(R_repaired, R_clean)
+```
+
+Варианты повреждений:
+
+```text
+edge dropout
+edge noise
+wrong edge type
+channel mixing
+row/column chimera
+missing node attributes
+partial subgraph deletion
+direction corruption
+spurious bridge insertion
+```
+
+Метрики:
+
+```text
+edge recovery AUROC / AUPR
+edge type accuracy
+relation matrix reconstruction error
+subsystem recovery F1
+bridge edge precision
+noise removal precision
+repair improves downstream task?
+```
+
+### 6.3. Поиск замкнутых подсистем
+
+Это изначально одна из самых сильных идей SRCF.
+
+Если есть большая система отношений, SRCF может искать:
+
+- какие части системы образуют устойчивый basin;
+- какие связи держат подсистему;
+- где подсистема плохо замыкается;
+- какие элементы являются мостами между basins;
+- какие элементы являются fringe / boundary nodes;
+- какие подсистемы recoverable;
+- какие подсистемы overclosed и слишком жестко связаны;
+- какие подсистемы underclosed и разваливаются при perturbation.
+
+Обычные методы дают clustering / community detection.
+
+SRCF должен давать другое:
+
+```text
+не просто “плотно связано”,
+а “восстанавливается как самосогласованная система”.
+```
+
+Примеры:
+
+```text
+компания: какие команды / процессы реально связаны
+граф сервисов: какие сервисы образуют устойчивый контур
+мозг: какие области работают как устойчивый функциональный модуль
+экономика: какие активы / сектора образуют режим
+молекулы: какие подструктуры держат взаимодействие
+код: какие файлы образуют архитектурный closure loop
+агент: какие memories/tools/facts образуют решаемую задачу
+knowledge graph: какие факты образуют самосогласованную область
+```
+
+Минимальный алгоритм:
+
+```text
+1. Берем большой R[N,N,C].
+2. Сэмплируем подграфы / candidate subsystems.
+3. Для каждого подграфа считаем closure_profile.
+4. Ищем группы с:
+   - низким fixed distance;
+   - хорошим recovery;
+   - нормальной state variance;
+   - устойчивым basin_id;
+   - сильной internal closure;
+   - слабой dependency на внешние nodes.
+5. Узлы с высокой cross-basin важностью считаем bridge nodes.
+6. Узлы с нестабильным membership считаем boundary/fringe nodes.
+```
+
+Метрики:
+
+```text
+subsystem stability
+internal closure score
+external dependency score
+bridge importance
+boundary instability
+recovery after edge dropout
+basin consistency under node permutation
+```
+
+### 6.4. Агент: проверка смысла задачи / вопроса
+
+Самое сильное прикладное направление рядом с графами.
 
 Для агента relation matrix можно строить из:
 
@@ -247,9 +501,9 @@ SRCF может стать предварительным мозгом аген�
 “понимаю ли я задачу достаточно, чтобы действовать?”
 ```
 
-### 6.2. Кодовые базы и архитектура проекта
+### 6.5. Кодовые базы и архитектура проекта
 
-Это второе самое сильное направление.
+Это второе самое сильное направление после graph pretraining / repair / agent closure.
 
 Для твоих проектов relation matrix естественная:
 
@@ -304,7 +558,7 @@ architectural closure diagnostics
 5. Проверить, какие breaks дают underclosed / overclosed / multi-basin profile.
 ```
 
-### 6.3. LLM embeddings и semantic basins
+### 6.6. LLM embeddings и semantic basins
 
 LLM embeddings сами по себе дают cosine similarity.
 
@@ -345,7 +599,7 @@ RAG context -> relation closure -> stable answer basin?
 
 Если closure плохой, агент не должен уверенно отвечать.
 
-### 6.4. Память агента
+### 6.7. Память агента
 
 Обычная память агента:
 
@@ -385,7 +639,7 @@ memory_i -> current_task_j:
 
 Это сильнее, чем просто top-k retrieval.
 
-### 6.5. Научные графы: paper -> idea -> method -> result
+### 6.8. Научные графы: paper -> idea -> method -> result
 
 SRCF можно использовать для карты исследований.
 
@@ -416,7 +670,7 @@ paper_i -> paper_j:
 
 Для research-проектов по matrix/operator/field это очень полезно.
 
-### 6.6. Биология шире DNA
+### 6.9. Биология шире DNA
 
 DNA была удобной, потому что relation matrix естественная:
 
@@ -445,7 +699,7 @@ motifs -> transition relation
 биологическая система отношений самозамыкается или нет?
 ```
 
-### 6.7. Сенсоры, промышленные системы, биосигналы
+### 6.10. Сенсоры, промышленные системы, биосигналы
 
 Relation matrix:
 
@@ -471,7 +725,7 @@ sensor_i -> sensor_j:
 
 Это лучше подходит SRCF, чем таблички без структуры отношений.
 
-### 6.8. Сетевой трафик и сервисные зависимости
+### 6.11. Сетевой трафик и сервисные зависимости
 
 Relation matrix:
 
@@ -495,7 +749,7 @@ host_i -> host_j:
 - underclosed broken dependency;
 - recovery quality after incident.
 
-### 6.9. Финансовые/рыночные relation systems
+### 6.12. Финансовые/рыночные relation systems
 
 Осторожно: не как “предсказатель цены”.
 
@@ -547,7 +801,7 @@ SRCF не надо пихать везде.
 Следующий этап:
 
 ```text
-интерпретация closure dynamics
+интерпретация closure dynamics + graph repair
 ```
 
 Надо понять, что именно SRCF меняет в relation matrix.
@@ -588,6 +842,12 @@ Delta = H* - H0
 какие task/tool/file/fact связи делают вопрос решаемым или нерешаемым?
 ```
 
+Для графа:
+
+```text
+какие edge/subgraph связи SRCF считает восстановимыми или мостовыми?
+```
+
 ### 8.2. Channel attribution
 
 Для каждого relation channel:
@@ -612,7 +872,10 @@ Delta = H* - H0
 - overclosed basin;
 - multi-basin;
 - collapsed basin;
-- noisy/recoverable basin.
+- noisy/recoverable basin;
+- repairable basin;
+- non-repairable basin;
+- subsystem basin.
 
 ### 8.4. Closure curve dashboard
 
@@ -628,17 +891,106 @@ fixed
 contract
 h_contract
 state_var
+edge_recovery
+subsystem_stability
 ```
 
 Это должно стать основной диагностикой, а не один AUROC.
 
 ## 9. Лучший следующий MVP
 
-Самый полезный следующий MVP:
+Самый полезный следующий MVP теперь разделяется на три связанные линии:
 
 ```text
-SRCF Agent Task Closure Benchmark
+1. Graph Self-Supervised Closure Pretraining
+2. Relation Repair / Denoising
+3. Agent Task Closure Benchmark
 ```
+
+### 9.1. MVP-A: Graph Self-Supervised Closure Pretraining
+
+Цель:
+
+```text
+проверить, дает ли SRCF полезное representation для графов без labels.
+```
+
+Данные:
+
+```text
+molecules
+protein graphs
+knowledge graphs
+code dependency graphs
+service dependency graphs
+transaction graphs
+```
+
+Pipeline:
+
+```text
+R_graph -> SRCF pretrain без labels -> H* / closure_profile -> downstream head
+```
+
+Downstream:
+
+```text
+graph classification
+link prediction
+edge recovery
+subsystem detection
+```
+
+Сравнить:
+
+```text
+raw graph statistics
+node2vec/graph2vec
+GNN autoencoder
+contrastive GNN
+SRCF descriptor
+GNN + SRCF descriptor
+```
+
+### 9.2. MVP-B: Relation Repair / Denoising
+
+Цель:
+
+```text
+проверить, может ли SRCF не только оценивать, но и восстанавливать relation structure.
+```
+
+Файлы:
+
+```text
+srcf_relation_repair_model.py
+srcf_graph_corruption.py
+srcf_graph_repair_benchmark.py
+srcf_edge_recovery_report.py
+```
+
+Corruptions:
+
+```text
+edge dropout
+wrong edge type
+edge noise
+spurious bridge
+direction flip
+channel mix
+subgraph deletion
+```
+
+Metrics:
+
+```text
+edge recovery AUROC/AUPR
+edge type accuracy
+relation reconstruction error
+repair improves downstream task
+```
+
+### 9.3. MVP-C: Agent Task Closure Benchmark
 
 Цель:
 
@@ -646,9 +998,7 @@ SRCF Agent Task Closure Benchmark
 проверить, может ли SRCF определить, замкнута ли задача для агента.
 ```
 
-### 9.1. Типы задач
-
-Собрать 200-500 задач:
+Типы задач:
 
 ```text
 closed             = можно делать сразу
@@ -662,9 +1012,7 @@ multi_basin        = несколько возможных трактовок
 trivial_overclosed = ответ почти шаблонный / уже есть в контексте
 ```
 
-### 9.2. Relation nodes
-
-Узлы:
+Relation nodes:
 
 ```text
 user_goal
@@ -680,9 +1028,7 @@ past_context
 plan_steps
 ```
 
-### 9.3. Relation channels
-
-Каналы:
+Relation channels:
 
 ```text
 semantic_similarity
@@ -699,11 +1045,7 @@ has_source
 missing_dependency
 ```
 
-### 9.4. Модель
-
-Не надо сразу делать сложный агент.
-
-Достаточно:
+Модель:
 
 ```text
 R[task_nodes, task_nodes, channels]
@@ -711,10 +1053,6 @@ SRCF pretrain без labels
 closure_profile extraction
 маленький classifier/router сверху
 ```
-
-### 9.5. Что измерять
-
-Не только accuracy.
 
 Метрики:
 
@@ -873,11 +1211,14 @@ Anomaly benchmarks are diagnostic tests, not the final goal.
 
 ```text
 Primary use cases:
-1. Agent task closure
-2. Code architecture closure
-3. RAG context closure
-4. Memory relation closure
-5. Scientific/biological relation systems
+1. Graph self-supervised pretraining
+2. Relation repair / denoising
+3. Closed subsystem discovery
+4. Agent task closure
+5. Code architecture closure
+6. RAG context closure
+7. Memory relation closure
+8. Scientific/biological relation systems
 ```
 
 Добавить честный статус:
@@ -893,7 +1234,9 @@ What is proven:
 What is not proven:
 - superiority over standard DNA anomaly baselines;
 - general practical advantage on arbitrary tabular datasets;
-- optimal relation construction for each domain.
+- optimal relation construction for each domain;
+- graph pretraining advantage over existing GNN pretraining;
+- repair quality on real noisy graphs.
 ```
 
 ## 13. Что не делать сейчас
@@ -906,7 +1249,8 @@ What is not proven:
 - не делать сразу огромную архитектуру;
 - не смешивать все domains в один непонятный benchmark;
 - не оценивать только одним AUROC;
-- не забывать про интерпретацию edge/channel/curve.
+- не забывать про интерпретацию edge/channel/curve;
+- не забывать, что graph repair может быть важнее anomaly score.
 
 ## 14. Что делать прямо сейчас
 
@@ -921,7 +1265,7 @@ SRCF = relation closure engine.
 DNA basin training works.
 Real DNA anomaly advantage not proven.
 Overclosed/underclosed signal is the main new observation.
-Next focus: interpretation and agent/code/RAG closure tasks.
+Next focus: graph pretraining, relation repair, closed subsystem discovery, agent/code/RAG closure tasks.
 ```
 
 ### Шаг 2. Добавить interpreters
@@ -935,7 +1279,40 @@ srcf_basin_cluster_report.py
 srcf_closure_profile_export.py
 ```
 
-### Шаг 3. Сделать Agent Task Closure MVP
+### Шаг 3. Сделать Graph Pretraining MVP
+
+Файлы:
+
+```text
+srcf_graph_relation_builder.py
+srcf_graph_pretrain.py
+srcf_graph_downstream_eval.py
+srcf_graph_pretraining_report.py
+```
+
+### Шаг 4. Сделать Relation Repair MVP
+
+Файлы:
+
+```text
+srcf_relation_repair_model.py
+srcf_graph_corruption.py
+srcf_graph_repair_benchmark.py
+srcf_edge_recovery_report.py
+```
+
+### Шаг 5. Сделать Closed Subsystem Discovery MVP
+
+Файлы:
+
+```text
+srcf_subsystem_sampler.py
+srcf_subsystem_closure_score.py
+srcf_bridge_boundary_detector.py
+srcf_subsystem_report.py
+```
+
+### Шаг 6. Сделать Agent Task Closure MVP
 
 Файлы:
 
@@ -945,7 +1322,7 @@ srcf_agent_task_relation_builder.py
 srcf_agent_task_closure_benchmark.py
 ```
 
-### Шаг 4. Сделать Code Closure MVP
+### Шаг 7. Сделать Code Closure MVP
 
 Файлы:
 
@@ -955,9 +1332,9 @@ srcf_code_closure_benchmark.py
 srcf_code_break_injector.py
 ```
 
-### Шаг 5. Только потом возвращаться к DNA/protein/sensors
+### Шаг 8. Только потом возвращаться к DNA/protein/sensors
 
-После того как появится нормальная интерпретация closure dynamics.
+После того как появится нормальная интерпретация closure dynamics и repair/subsystem метрики.
 
 ## 15. Короткий финальный вывод
 
@@ -976,6 +1353,10 @@ universal anomaly detector
 Максимальная польза ожидается там, где важна не отдельная точка, а структура отношений:
 
 ```text
+графы,
+self-supervised graph pretraining,
+relation repair / denoising,
+поиск замкнутых подсистем,
 агентные задачи,
 кодовые архитектуры,
 RAG-контекст,
@@ -986,17 +1367,25 @@ RAG-контекст,
 сервисные зависимости.
 ```
 
-Самый сильный следующий эксперимент:
+Самые сильные следующие эксперименты:
 
 ```text
-SRCF Agent Task Closure Benchmark
+1. SRCF Graph Self-Supervised Pretraining
+2. SRCF Relation Repair / Denoising
+3. SRCF Closed Subsystem Discovery
+4. SRCF Agent Task Closure Benchmark
 ```
 
-Потому что там SRCF может отвечать на реально важный вопрос:
+Почему это сильнее, чем anomaly:
 
 ```text
-эта задача для агента замкнута, решаема и устойчива,
-или она недоопределена, противоречива, overclosed/underclosed?
+SRCF не просто говорит “объект странный”.
+Он показывает, как relation system замыкается,
+что восстанавливается,
+что не замыкается,
+какие подсистемы устойчивы,
+какие ребра держат basin,
+и где система overclosed / underclosed.
 ```
 
 Это намного ценнее, чем продолжать гонку “еще один anomaly dataset”.
