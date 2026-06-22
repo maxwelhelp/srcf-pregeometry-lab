@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pt
+*.pth
+*.ckpt
+*.log
+dna_*.fasta
+.cache/
+.venv/
+venv/
+data/
+runs/
