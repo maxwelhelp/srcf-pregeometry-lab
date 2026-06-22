@@ -1,12 +1,29 @@
 # SRCF status
 
-## Observed so far
+Current fix: v5.2 model + v5 hard benchmark.
 
-- PG-SQF supervised toy tasks solve quickly, but the benchmark is too easy.
-- Older SRCF anomaly benchmark showed high instability AUROC, but embedding distance was also perfect, so it did not prove unique value.
-- SRCF v4 DNA training showed real basin contraction: contract and h_contract below 1 with decaying curves.
-- v5 fixes CSV logging, version printing, DNA k-mer indexing, far-preservation and variance guards.
+## Why this patch exists
 
-## Main risk
+Previous v5 model crashed in DNA mode with `NameError: csv_file is not defined`. Fixed.
 
-A model can learn damping or identity-like stability instead of true basin formation. Therefore every run must track identity/random baseline, contract/h_contract, far_keep, move, curve, state_var, and calibrated benchmarks against embedding/raw baselines.
+Previous hard anomaly benchmark reported very low calibrated AUROC. This exposed two issues:
+
+1. v4 benchmark mixed batch-level intrinsic metrics into per-sample anomaly features.
+2. Some anomalies are not high-instability; they are over-stable / over-contractive. Therefore the benchmark now reports high-tail, low-tail and best separability AUROC.
+
+## What matters
+
+Training:
+- `contract < 1`
+- `h_contract < 1`
+- `far_keep >= 0.75`
+- `move > 0.12`
+- `curve` decays
+- `state_var` should not collapse
+
+Benchmark:
+- `high` means anomaly score high = anomaly.
+- `low` means inverted direction; anomaly score low = anomaly.
+- `best` is separability only, useful for research but not a deployable unsupervised anomaly score by itself.
+
+Goal: make `calibrated_closure_high` beat `embedding_dist_high` and `raw_summary_dist_high` on hard anomalies. If only `low/best` is high, closure dynamics separates the data but the anomaly scoring direction is not solved yet.
