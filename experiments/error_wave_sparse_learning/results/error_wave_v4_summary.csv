@@ -1,0 +1,6 @@
+method,patch_mean,patch_std,retain_mean,retain_std,forget_mean,forget_std,orig_all_mean,orig_all_std,notes
+full_bp,0.952,0.003,0.612,0.023,0.316,0.026,0.557,0.037,Обычный полный backprop: лучший patch но сильное забывание
+random_sparse,0.598,0.044,0.827,0.052,0.103,0.038,0.777,0.070,Случайная sparse-маска: хорошо сохраняет но плохо патчит
+error_wave_v2,0.820,0.065,0.823,0.038,0.110,0.039,0.715,0.048,Context-aware blame без v4 улучшений
+error_wave_sel,0.846,0.032,0.779,0.017,0.151,0.020,0.679,0.038,Selectivity: выше patch но хуже retention
+error_wave_v4,0.944,0.004,0.802,0.010,0.128,0.007,0.700,0.025,Лучший баланс: почти full_bp patch и намного меньше forgetting
