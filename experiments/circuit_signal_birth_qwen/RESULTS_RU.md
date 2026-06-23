@@ -81,40 +81,81 @@ VO = private/head-specific write language
 
 ---
 
-## 4. Fine-tune protection test
+## 4. Fine-tune protection test v1.3
 
 Файл: `circuit_birth_finetune_protect_v1_3.py`
 
 Тест: baseline LoRA fine-tune vs LoRA + circuit-birth protected-subspace regularizer.
 
-Настройка стресс-теста:
+Цель: проверить не только reconstruction/interp, а можно ли использовать найденные BirthOps как training-control signal.
+
+### 4.1 Stress run: сильная защита
+
+Настройка:
 
 - layer `23`
 - heads `0..6`
 - deltas `0..2`
 - LoRA rank `8`
-- steps `160`
-- `lambda_protect=10.0`
+- steps `200`
+- lr `3e-4`
+- `lambda_protect=50.0`
 - `protect-loss=l1`
 
 Результат:
 
 | Метрика | Baseline | Protect | Вывод |
 |---|---:|---:|---|
-| edit loss | 0.0016 | 0.0021 | почти одинаково |
+| edit loss | 0.0011 | 0.0022 | protect чуть хуже, но разница мала |
 | edit acc | 1.000 | 1.000 | edit выучен полностью |
-| retain loss | 2.4559 | 2.4603 | почти одинаково |
-| retain acc | 0.577 | 0.615 | protect лучше на +3.8 п.п. |
-| QK coeff drift | 0.002819 | 0.000039 | drift меньше на 98.60% |
-| VO coeff drift | 0.014717 | 0.000213 | drift меньше на 98.55% |
+| retain loss | 2.4598 | 2.4364 | protect лучше |
+| retain acc | 0.577 | 0.577 | одинаково |
+| QK coeff drift | 0.002154 | 0.000060 | drift меньше на 97.22% |
+| VO coeff drift | 0.017149 | 0.000079 | drift меньше на 99.54% |
 
-Главный вывод:
+Вывод stress run:
 
 ```text
-Circuit-birth protection сохранил edit accuracy 100%, почти не ухудшил edit loss, и снизил drift защищённых QK/VO BirthOps примерно на 98.5%.
+Protect сохранил edit accuracy 100%, улучшил retain loss на 0.0234 и резко снизил drift защищённых QK/VO components: QK -97.22%, VO -99.54%.
 ```
 
-Это уже доказывает практическую применимость как circuit-aware regularizer / protected subspace.
+### 4.2 Multi-seed check: seeds 123/124/125
+
+Настройка:
+
+- layer `23`
+- heads `0..6`
+- deltas `0..2`
+- LoRA rank `8`
+- steps `160`
+- lr `2e-4`
+- `lambda_protect=10.0`
+- `protect-loss=l1`
+
+Сводка по трём seed:
+
+| Метрика | Baseline avg | Protect avg | Вывод |
+|---|---:|---:|---|
+| edit acc | 1.000 | 1.000 | edit success сохранён |
+| edit loss | ~0.00163 | ~0.00207 | protect чуть хуже на ~0.00043 |
+| retain loss | ~2.4908 | ~2.5020 | protect чуть хуже на ~0.0112 |
+| retain acc | ~0.5767 | ~0.6023 | protect лучше на ~+2.6 п.п. |
+| QK drift reduction | — | ~98.49% | стабильно большой эффект |
+| VO drift reduction | — | ~98.12% | стабильно большой эффект |
+
+По seed:
+
+| Seed | QK drift reduction | VO drift reduction | edit acc | retain acc baseline → protect |
+|---:|---:|---:|---:|---:|
+| 123 | 98.60% | 98.55% | 1.000 | 0.577 → 0.615 |
+| 124 | 99.01% | 98.14% | 1.000 | 0.615 → 0.615 |
+| 125 | 97.87% | 97.66% | 1.000 | 0.538 → 0.577 |
+
+Главный вывод multi-seed:
+
+```text
+Circuit-birth protection стабильно сохраняет edit success и снижает drift защищённых QK/VO circuit-компонентов примерно на 97–99%. Retain accuracy чаще лучше, retain loss пока смешанный/почти нейтральный.
+```
 
 ---
 
@@ -126,16 +167,46 @@ Circuit-birth protection сохранил edit accuracy 100%, почти не у
 - QK BirthOps обобщаются между головами;
 - VO требует per-head prompt validation;
 - protected-subspace regularizer резко снижает drift защищённых circuit-компонентов при сохранении edit success;
-- в нашем stress test drift снизился примерно на 98.5%.
+- в stress run drift снизился на 97.22% по QK и 99.54% по VO;
+- в multi-seed check drift reduction стабилен: примерно 98.49% QK и 98.12% VO.
 
 Нельзя пока говорить:
 
 - “обучение стало лучше на 98%”;
 - “метод гарантированно снижает forgetting”;
-- “VO полностью закрыт компактным словарём”.
+- “VO полностью закрыт компактным словарём”;
+- “метод доказан на больших downstream benchmark”.
 
 Корректная формулировка:
 
 ```text
-Метод уменьшает circuit drift на 98.5% при сохранении edit success в первом LoRA stress test. Это сильный proof-of-concept для circuit-aware training, но нужен multi-seed и real downstream benchmark.
+Метод уменьшает drift защищённых circuit-компонентов примерно на 97–99% при сохранении edit success в LoRA fine-tune. Это сильный proof-of-concept для circuit-aware training. Следующий обязательный шаг — ablation против random/base-dict protection и более честный downstream/retain benchmark.
 ```
+
+---
+
+## 6. Текущая оценка
+
+```text
+Circuit signal birth как structural signal channel: 9/10
+Fine-tune protection как proof-of-concept: 8/10
+Anti-forgetting доказательство: 5.5/10 пока
+Готовый training method: 6/10 пока
+```
+
+Почему сильно:
+
+- real Qwen;
+- real LoRA fine-tune;
+- edit task выучен полностью;
+- protected circuit drift стабильно падает на 97–99%;
+- эффект повторяется на нескольких seed.
+
+Почему не финал:
+
+- edit/retain набор маленький;
+- retain loss не всегда лучше;
+- нет random-protect ablation;
+- нет QK-only / VO-only сравнения;
+- нет lambda sweep;
+- нет настоящего downstream benchmark.
