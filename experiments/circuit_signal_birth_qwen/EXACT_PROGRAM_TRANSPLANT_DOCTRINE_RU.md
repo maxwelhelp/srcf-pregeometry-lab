@@ -2,7 +2,7 @@
 
 Жёсткая спецификация для переноса знаний почти без обучения через матричный декодер, typed program DSL, structural diff, direct encode и closure-check.
 
-Цель документа — не описать ещё один distillation/fine-tune метод, а зафиксировать методологию **exact program transplant**:
+Цель документа — зафиксировать **exact program transplant**, а не ещё один distillation/fine-tune pipeline.
 
 ```text
 teacher weights
@@ -21,24 +21,19 @@ teacher weights
 Не превращать перенос знаний в KL/L2/alpha-sweep/LoRA-fitting под новым названием.
 ```
 
-Этот документ закрывает оставшиеся дыры:
+Главное уточнение про словарь:
 
-1. откуда берётся словарь примитивов;
-2. как принимается op;
-3. как сравниваются поля/conditions;
-4. как отличать circuit-target closure от weight-level closure;
-5. как калибруются пороги;
-6. как считается PASS per-head/per-layer;
-7. что делать при head/KV mismatch между моделями;
-8. как запрещается hidden fitting/dictionary learning/raw passthrough.
+```text
+self-expanding dictionary разрешён, но только как verified_extension_dictionary.
+analytic_base_dictionary остаётся analytic-only.
+Нельзя подсовывать target-mined atoms как base primitives.
+```
 
 ---
 
 ## 1. Главная доктрина
 
 ### 1.1 Основной путь
-
-Основной путь:
 
 ```text
 decode -> typed program -> structural diff -> structural translation -> encode -> closure
@@ -64,7 +59,7 @@ alpha/beta sweep как поиск патча
 LoRA/SVD patch как основной перенос
 activation patch как success criterion без program closure
 raw weight tensor as program
-learned dictionary from target checkpoint
+learned dictionary from target checkpoint as base dictionary
 fitting/regression inside encode()
 soft structural matching via arbitrary similarity score
 ```
@@ -93,8 +88,6 @@ minimal residual repair after exact transplant attempt
 ## 2. Математическая база Qwen circuit targets
 
 ### 2.1 QK target
-
-Для головы внимания:
 
 ```python
 M_qk_aug[h, delta] = Wq_aug[h].T @ R_delta @ Wk_aug[kv] / sqrt(D)
@@ -199,6 +192,7 @@ class Op:
     op_id: str
     op_type: str
     source: str             # analytic_primitive | typed_birth | diagnostic_only
+    dictionary_level: str   # analytic_base_dictionary | verified_extension_dictionary | universal_promoted_dictionary
     read_fields: tuple[str, ...]
     write_fields: tuple[str, ...]
     condition_type: str     # enum, exact match only
@@ -210,6 +204,9 @@ class Op:
     encode_status: str      # exact | closed_form | unavailable
     decode_error_after: float
     typing_status: str      # typed | untyped_rejected | diagnostic_only
+    depends_on_checkpoint_data: bool
+    universal: bool
+    transferable: bool
 ```
 
 ### 3.3 Residual report
@@ -244,11 +241,38 @@ class ProgramDiff:
 
 ---
 
-## 4. Аналитический словарь примитивов
+## 4. Словарь примитивов: analytic base + self-expanding extension
 
-### 4.1 Главное правило
+Это главный раздел. Он специально разводит **аналитический базовый словарь** и **саморасширяющийся проверенный словарь**, чтобы не было конфликта между exact-transplant doctrine и signal_birth/residual-mining технологией.
 
-Словарь примитивов нельзя обучать на матрицах конкретного checkpoint.
+### 4.1 Три уровня словаря
+
+```text
+Level 0: analytic_base_dictionary
+Level 1: verified_extension_dictionary
+Level 2: universal_promoted_dictionary
+```
+
+Коротко:
+
+```text
+self-expanding dictionary = разрешён
+self-expanding base dictionary = запрещён
+```
+
+### 4.2 Level 0 — analytic_base_dictionary
+
+Это единственный словарь, который можно использовать для первичного exact decode без риска hidden fitting.
+
+Источник:
+
+```text
+архитектурные формулы
+identity / shift / block average / bias column
+RoPE-derived analytic templates
+fixed DCT/Hadamard templates
+ручные typed primitives с явной формулой
+```
 
 Запрещено:
 
@@ -258,20 +282,19 @@ PCA/clustering по M_qk/C_vo текущей модели для построе�
 подгонка primitive.matrix под target checkpoint
 ```
 
-Разрешено:
+Manifest:
 
-```text
-аналитические матрицы из архитектурных констант
-RoPE formula
-identity/diagonal/shift/local-window/block-average
-known positional masks
-fixed DCT/Hadamard-like transforms если они не fitted
-ручные typed primitives с явной формулой
+```json
+{
+  "dictionary_level": "analytic_base_dictionary",
+  "dictionary_source": "analytic_only",
+  "depends_on_checkpoint_data": false,
+  "depends_on_training_data": false,
+  "eligible_for_exact_base_decode": true
+}
 ```
 
-BirthOps можно майнить из residual, но они не становятся базовым словарём без отдельной типизации/калибровки.
-
-### 4.2 QK analytic primitives v1
+### 4.3 QK analytic primitives v1
 
 Каждый primitive строится функцией от `(H, delta, rope, config)`, а не от данных модели.
 
@@ -287,7 +310,6 @@ def qk_bias_column(H):
 
 
 def qk_self_route(H):
-    # diagonal content route, not learned
     M = zeros(H + 1, H + 1)
     M[:H, :H] = eye(H)
     return M
@@ -311,8 +333,7 @@ def qk_block_avg(H, block):
 
 
 def qk_rope_relative_template(H, rope_delta_id):
-    # В QK target RoPE уже входит в M_qk через R_delta.
-    # Этот primitive допустим только если он строится аналитически из R_delta,
+    # Допустимо только если строится аналитически из RoPE/R_delta,
     # а не fitted по checkpoint.
     return analytic_rope_template(H, rope_delta_id)
 ```
@@ -326,10 +347,9 @@ QK_ShiftFeatureRoute
 QK_BlockAverageRoute
 QK_BiasRoute
 QK_RoPERelativeRoute
-QK_BirthTypedRoute
 ```
 
-### 4.3 VO analytic primitives v1
+### 4.4 VO analytic primitives v1
 
 ```python
 def vo_identity_rect(H):
@@ -368,17 +388,16 @@ VO_IdentityWrite
 VO_BiasWrite
 VO_ShiftFeatureWrite
 VO_BlockAverageWrite
-VO_HeadPrivateWrite
-VO_BirthTypedWrite
 ```
 
-### 4.4 Primitive manifest
+### 4.5 Primitive manifest
 
-Каждый primitive обязан иметь:
+Каждый Level 0 primitive обязан иметь:
 
 ```json
 {
   "op_type": "QK_SelfRoute",
+  "dictionary_level": "analytic_base_dictionary",
   "source": "analytic_primitive",
   "formula": "diag(I_H, 0_bias)",
   "depends_on_checkpoint_data": false,
@@ -390,7 +409,303 @@ VO_BirthTypedWrite
 }
 ```
 
-Если `depends_on_checkpoint_data=true`, primitive не может входить в базовый словарь. Он может быть только `typed_birth` после калибровки.
+Если `depends_on_checkpoint_data=true`, primitive не может входить в Level 0. Он может быть только Level 1 verified extension.
+
+### 4.6 Level 1 — verified_extension_dictionary
+
+Это саморасширяющийся словарь, который рождается из residual после Level 0 decode.
+
+Источник:
+
+```text
+residual после Level 0 decode
+PCA/SVD/OMP/mined atoms
+target_mined atoms
+BirthOps
+```
+
+Каждый атом обязан быть помечен:
+
+```json
+{
+  "dictionary_level": "verified_extension_dictionary",
+  "source": "target_mined_residual",
+  "depends_on_checkpoint_data": true,
+  "universal": false,
+  "transferable": false,
+  "eligible_for_exact_base_decode": false
+}
+```
+
+Level 1 можно использовать для:
+
+```text
+residual explanation
+same-checkpoint extension
+same-family candidate transfer
+diagnostics
+minimal repair plan
+```
+
+Level 1 нельзя использовать для:
+
+```text
+заявления universal primitive
+cross-model exact transplant без structural promotion
+base dictionary в synthetic calibration
+```
+
+### 4.7 Candidate mining formula для Level 1
+
+Пусть:
+
+```python
+M        # target circuit matrix
+D0       # Level 0 analytic dictionary
+M0_hat   # reconstruction from D0
+R0 = M - M0_hat
+```
+
+Candidate from residual:
+
+```python
+u = mine_residual_atom(R0)
+u = u / ||u||
+```
+
+Best closed-form coefficient:
+
+```python
+c = <R0, u> / (<u, u> + eps)
+```
+
+Candidate reconstruction:
+
+```python
+M1_hat = M0_hat + c * u
+```
+
+Marginal gain:
+
+```python
+gain = rel_err(M0_hat, M) - rel_err(M1_hat, M)
+```
+
+Energy fraction explained:
+
+```python
+explained_energy_frac = (||R0||^2 - ||R0 - c*u||^2) / (||M||^2 + eps)
+```
+
+Acceptance into Level 1 requires:
+
+```text
+gain >= MIN_EXTENSION_GAIN
+explained_energy_frac >= MIN_EXTENSION_ENERGY_FRAC
+heldout_gain >= MIN_HELDOUT_GAIN
+dup_corr <= MAX_DUP_CORR
+retain/function safety passed
+```
+
+Даже после acceptance кандидат остаётся:
+
+```text
+source = target_mined_residual
+universal = false
+eligible_for_exact_base_decode = false
+```
+
+### 4.8 Typed extension, not raw vector
+
+Mined atom не может оставаться анонимным PCA/SVD-вектором, если он участвует в exact program transplant.
+
+Он должен стать одним из:
+
+```text
+QK_BirthTypedRoute
+VO_BirthTypedWrite
+MLP_BirthTypedTransform
+DIAGNOSTIC_ONLY_UNTYPED_ATOM
+```
+
+Typing signature example:
+
+```json
+{
+  "rank": 4,
+  "diagonal_mass": 0.72,
+  "local_band_mass": 0.81,
+  "bias_col_mass": 0.02,
+  "symmetry": 0.93,
+  "shift_peak": 1,
+  "block_avg_score": 0.14,
+  "role_guess": "local_route"
+}
+```
+
+If typing fails:
+
+```text
+DIAGNOSTIC_ONLY_UNTYPED_ATOM
+```
+
+and the atom cannot be transferred.
+
+### 4.9 Verification gates for Level 1
+
+A target-mined atom is accepted into `verified_extension_dictionary` only if selected gates pass.
+
+QK gate:
+
+```text
+train heads/deltas -> mine atom
+heldout heads/deltas -> verify gain
+```
+
+VO gate:
+
+```text
+same head -> train prompts / heldout prompts
+```
+
+This matches current finding:
+
+```text
+QK = shared routing language
+VO = private/head-specific write language
+```
+
+Functional gate:
+
+```text
+QK: A_rel improves, KL improves, top1 does not degrade
+VO: Y_all_rel improves, H_after_rel improves, retain damage bounded
+```
+
+Duplicate gate:
+
+```python
+dup_corr = max(abs(cosine(candidate, existing_op)) for existing_op in dictionary)
+accept if dup_corr <= MAX_DUP_CORR
+```
+
+Safety gate:
+
+```text
+retain_loss_delta <= MAX_RETAIN_DELTA
+retain_logprob_damage <= MAX_RETAIN_DAMAGE
+```
+
+Every accepted Level 1 atom must be written to:
+
+```text
+verified_extension_dictionary.jsonl
+```
+
+Example:
+
+```json
+{
+  "op_id": "QK_BirthTypedRoute_L23_H0_PCA0",
+  "dictionary_level": "verified_extension_dictionary",
+  "source": "target_mined_residual",
+  "universal": false,
+  "transferable": false,
+  "train_gain": 0.71,
+  "heldout_gain": 0.67,
+  "functional_gain": {"A_rel_delta": -0.75},
+  "dup_corr": 0.12,
+  "typing_status": "typed",
+  "promotion_status": "not_promoted"
+}
+```
+
+### 4.10 Level 2 — universal_promoted_dictionary
+
+Level 1 atom может стать universal primitive только после promotion.
+
+Required evidence:
+
+```text
+synthetic calibration passed
+same-checkpoint roundtrip passed
+heldout heads/layers passed
+multi-seed stable
+multi-checkpoint stable
+causal closure or direct replay evidence
+no excessive retain damage
+```
+
+Promotion metrics:
+
+```text
+op_type_precision >= 0.98
+op_type_recall >= 0.95
+false_birth_rate <= 0.02
+heldout_gain_mean > threshold
+heldout_gain_std bounded
+causal_closure_rate >= 0.8
+```
+
+Promotion manifest:
+
+```json
+{
+  "old_level": "verified_extension_dictionary",
+  "new_level": "universal_promoted_dictionary",
+  "promotion_passed": true,
+  "promotion_evidence_files": [
+    "synthetic_calibration_report.json",
+    "heldout_gate_report.json",
+    "multi_checkpoint_report.json",
+    "causal_closure_report.json"
+  ]
+}
+```
+
+Until promoted:
+
+```text
+not universal
+not base dictionary
+not exact cross-model primitive
+```
+
+### 4.11 Updated closure statuses for dictionary levels
+
+If only Level 0 closes:
+
+```text
+ANALYTIC_PROGRAM_CLOSED
+```
+
+If Level 0 + Level 1 closes:
+
+```text
+EXTENDED_TARGET_SPECIFIC_PROGRAM_CLOSED
+```
+
+If Level 2 universal primitives close:
+
+```text
+UNIVERSAL_PROGRAM_CLOSED
+```
+
+Do not call Level 1 closure universal.
+
+Example manifest:
+
+```json
+{
+  "status": "EXTENDED_TARGET_SPECIFIC_PROGRAM_CLOSED",
+  "closure_level": "circuit_target",
+  "base_dictionary_level": "analytic_base_dictionary",
+  "extension_dictionary_level": "verified_extension_dictionary",
+  "extension_dictionary_used": true,
+  "unpromoted_extension_used": true,
+  "universal_claim_allowed": false
+}
+```
 
 ---
 
@@ -407,6 +722,7 @@ def accept_structural_op(
     err_before,
     err_after,
     energy_before,
+    residual_energy_after,
     total_energy,
 ):
     marginal_drop = err_before - err_after
@@ -415,13 +731,13 @@ def accept_structural_op(
     return (
         abs(coeff) >= MIN_COEFF_ABS
         and marginal_drop >= MIN_MARGINAL_REL_DROP
-        and explained_energy / total_energy >= MIN_EXPLAINED_ENERGY_FRAC
+        and explained_energy / (total_energy + eps) >= MIN_EXPLAINED_ENERGY_FRAC
         and op.source == "analytic_primitive"
         and op.depends_on_checkpoint_data is False
     )
 ```
 
-Стартовые значения v1:
+Initial values only for synthetic calibration:
 
 ```text
 MIN_COEFF_ABS = 1e-6
@@ -430,7 +746,7 @@ MIN_EXPLAINED_ENERGY_FRAC = 1e-4
 MAX_OPS_PER_PROGRAM = 64
 ```
 
-Но эти числа не финальные. Они должны быть откалиброваны на synthetic ground-truth tests.
+These numbers are not valid for real runs until frozen in `calibrated_thresholds.json`.
 
 ### 5.2 Sequential marginal accept
 
@@ -456,11 +772,16 @@ for primitive in ordered_primitives:
 
 ### 5.3 Global solve допустим только после marginal screen
 
-Если нужен least-squares для коэффициентов по уже принятым analytic ops:
+Allowed:
 
 ```text
-allowed: refit coefficients for accepted typed ops
-forbidden: use least-squares to discover arbitrary ops
+refit coefficients for accepted typed ops only
+```
+
+Forbidden:
+
+```text
+use least-squares to discover arbitrary ops
 ```
 
 Manifest:
@@ -474,7 +795,7 @@ Manifest:
 
 ---
 
-## 6. BirthOps: типизация и калибровка
+## 6. BirthOps: типизация, calibration и threshold freeze
 
 ### 6.1 BirthOp не является программой сам по себе
 
@@ -488,7 +809,7 @@ if typing failed -> diagnostic_only, not transferable
 
 ### 6.2 Type signatures
 
-Для QK BirthOp считаются:
+QK:
 
 ```python
 def qk_birth_signature(M):
@@ -504,7 +825,7 @@ def qk_birth_signature(M):
     }
 ```
 
-Для VO:
+VO:
 
 ```python
 def vo_birth_signature(C):
@@ -519,26 +840,15 @@ def vo_birth_signature(C):
     }
 ```
 
-### 6.3 Magic thresholds запрещены без calibration
+### 6.3 Synthetic calibration обязательна
 
-Порог вида:
-
-```python
-if locality > 0.8:
-    op_type = "QK_LocalDeltaRoute"
-```
-
-нельзя использовать на реальном Qwen, пока не пройден synthetic calibration.
-
-### 6.4 Synthetic calibration обязательна
-
-Перед real Qwen:
+Before real Qwen:
 
 ```text
 synthetic program -> encode -> decode -> compare true ops
 ```
 
-Пример:
+Example:
 
 ```python
 true_program = Program(ops=[
@@ -573,7 +883,50 @@ false_birth_rate <= 0.02
 roundtrip_error <= 1e-5 for synthetic exact programs
 ```
 
-Если synthetic calibration не закрыта, real Qwen exact transplant запрещён.
+### 6.4 Threshold calibration freeze
+
+After synthetic calibration, thresholds must be frozen into `calibrated_thresholds.json`.
+
+Real Qwen / same-checkpoint / cross-model runs must read this file and must not recalculate thresholds silently.
+
+Required file:
+
+```json
+{
+  "version": "calibrated_thresholds_v1",
+  "source": "synthetic_program_roundtrip_v1",
+  "frozen": true,
+  "MIN_COEFF_ABS": 1e-6,
+  "MIN_MARGINAL_REL_DROP": 1e-4,
+  "MIN_EXPLAINED_ENERGY_FRAC": 1e-4,
+  "MIN_EXTENSION_GAIN": 1e-3,
+  "MIN_EXTENSION_ENERGY_FRAC": 1e-4,
+  "MIN_HELDOUT_GAIN": 1e-3,
+  "MAX_DUP_CORR": 0.985,
+  "MAX_RETAIN_DELTA": 0.003,
+  "closure_tol_multiplier": 1.5,
+  "created_by": "synthetic_program_roundtrip_v1.py",
+  "locked_before_real_runs": true
+}
+```
+
+Real run manifest must contain:
+
+```json
+{
+  "thresholds_loaded_from": "calibrated_thresholds.json",
+  "thresholds_recomputed_in_real_run": false,
+  "thresholds_frozen": true
+}
+```
+
+If thresholds are changed after seeing real Qwen result:
+
+```text
+THRESHOLD_TUNING_CONTAMINATION
+```
+
+and the run is not valid as exact transplant evidence.
 
 ---
 
@@ -589,14 +942,14 @@ semantic fuzzy matching
 learned field alignment
 ```
 
-Разрешено:
+Same-checkpoint / same-family identity:
 
 ```python
 def compatible_fields(a: tuple[str, ...], b: tuple[str, ...]) -> bool:
     return tuple(a) == tuple(b)
 ```
 
-Для cross-model допускается только явно объявленный enum alias table:
+Cross-model допускает только ручной alias table:
 
 ```python
 FIELD_ALIASES = {
@@ -639,7 +992,7 @@ Procrustes/CCA for condition match
 def structural_match(op_t, op_s, mode):
     if op_t.op_type != op_s.op_type:
         return False
-    if mode == "same_checkpoint" or mode == "same_family_identity":
+    if mode in ("same_checkpoint", "same_family_identity"):
         fields_ok = op_t.read_fields == op_s.read_fields and op_t.write_fields == op_s.write_fields
     else:
         fields_ok = compatible_fields_cross_model(op_t.read_fields, op_s.read_fields) \
@@ -671,7 +1024,7 @@ full_forward_logits
 
 ### 8.2 Нельзя смешивать уровни
 
-Если закрыт только circuit target:
+If only circuit target is closed:
 
 ```json
 {
@@ -682,18 +1035,15 @@ full_forward_logits
 }
 ```
 
-Нельзя писать:
+Нельзя писать `EXACT_PROGRAM_TRANSPLANT_CLOSED`, если закрыт только `M_qk/C_vo`, но не было weight rewrite/full forward replay.
 
-```text
-EXACT_PROGRAM_TRANSPLANT_CLOSED
-```
-
-если закрыт только `M_qk/C_vo`, но не было weight rewrite/full forward replay.
-
-### 8.3 Статусы
+### 8.3 Status list
 
 ```text
 SYNTHETIC_PROGRAM_CLOSED
+ANALYTIC_PROGRAM_CLOSED
+EXTENDED_TARGET_SPECIFIC_PROGRAM_CLOSED
+UNIVERSAL_PROGRAM_CLOSED
 CIRCUIT_TARGET_PROGRAM_CLOSED
 WEIGHT_LEVEL_PROGRAM_CLOSED
 FULL_FORWARD_PROGRAM_CLOSED
@@ -701,6 +1051,7 @@ PARTIAL_PROGRAM_CLOSED
 STRUCTURAL_TRANSFER_BLOCKED
 TRIVIAL_DECODE_REJECTED
 APPROXIMATE_METHOD_REJECTED_AS_MAIN
+THRESHOLD_TUNING_CONTAMINATION
 ```
 
 ---
@@ -709,7 +1060,7 @@ APPROXIMATE_METHOD_REJECTED_AS_MAIN
 
 ### 9.1 Per-head metrics
 
-Каждая голова получает отдельный report:
+Every head gets its own report:
 
 ```json
 {
@@ -725,7 +1076,7 @@ APPROXIMATE_METHOD_REJECTED_AS_MAIN
 
 ### 9.2 Общий PASS
 
-Run-level PASS не может быть только средним.
+Run-level PASS cannot be only an average.
 
 ```python
 head_pass_rate = passed_heads / total_heads
@@ -735,8 +1086,8 @@ max_head_error = max(head.roundtrip_error for head in heads)
 Default:
 
 ```text
-REQUIRED_HEAD_PASS_RATE = 1.0 для same-checkpoint
-REQUIRED_HEAD_PASS_RATE = 0.8 для early cross-model structural diff
+REQUIRED_HEAD_PASS_RATE = 1.0 for same-checkpoint
+REQUIRED_HEAD_PASS_RATE = 0.8 for early cross-model structural diff
 ```
 
 Same-checkpoint PASS:
@@ -747,25 +1098,18 @@ max_head_error <= closure_tol
 no hidden failed heads
 ```
 
-Если 5 из 7 закрыты:
+If 5 of 7 heads closed:
 
 ```text
 PARTIAL_PROGRAM_CLOSED
 ```
 
-а не PASS.
+not PASS.
 
 ### 9.3 Per-layer aggregation
 
-Layer PASS:
-
 ```python
 layer_pass = all(head.status.endswith("CLOSED") for head in layer.head_reports)
-```
-
-Run PASS:
-
-```python
 run_pass = all(layer.pass for layer in layers)
 ```
 
@@ -776,8 +1120,6 @@ No averaging-based hiding.
 ## 10. Cross-model head/KV mismatch rules
 
 ### 10.1 Head config check
-
-Before matching:
 
 ```python
 def head_config(model):
@@ -825,7 +1167,7 @@ split one head into many
 Procrustes fit hidden basis
 ```
 
-Это может быть отдельный approximate baseline, но не exact transplant.
+This can be an approximate baseline, but not exact transplant.
 
 ---
 
@@ -833,14 +1175,14 @@ Procrustes fit hidden basis
 
 ### 11.1 Encode to circuit target first
 
-Первый encode target:
+First encode target:
 
 ```text
 Program -> M_qk_aug_hat
 Program -> C_vo_aug_hat
 ```
 
-Не сразу weights.
+Not weights first.
 
 ### 11.2 QK circuit encode
 
@@ -850,12 +1192,18 @@ def encode_qk_program(program, basis):
     for op in program.ops:
         if op.encode_status not in ("exact", "closed_form"):
             continue
-        primitive = build_analytic_primitive(op, basis)
+        primitive = build_analytic_or_verified_primitive(op, basis)
         M += op.params["coeff"] * primitive
     return M
 ```
 
-`build_analytic_primitive` не имеет доступа к target M.
+`build_analytic_or_verified_primitive` must obey dictionary level rules:
+
+```text
+Level 0: analytic formula only
+Level 1: target-specific verified atom only, not universal
+Level 2: promoted universal primitive
+```
 
 ### 11.3 VO circuit encode
 
@@ -863,14 +1211,14 @@ def encode_qk_program(program, basis):
 def encode_vo_program(program, basis):
     C = zeros(H, H + 1)
     for op in program.ops:
-        primitive = build_analytic_primitive(op, basis)
+        primitive = build_analytic_or_verified_primitive(op, basis)
         C += op.params["coeff"] * primitive
     return C
 ```
 
 ### 11.4 VO weight encode closed-form
 
-Если нужно переписать веса:
+If rewriting weights:
 
 ```python
 # Fixed Wo, solve Wv_aug
@@ -897,9 +1245,9 @@ QK weight encode is harder:
 M = Wq_aug.T @ R @ Wk_aug
 ```
 
-v1 must close QK at circuit-target/replay level first.
+v1 closes QK at circuit-target/replay level first.
 
-Weight-level QK transplant is separate v2 task.
+Weight-level QK transplant is v2.
 
 ---
 
@@ -907,7 +1255,7 @@ Weight-level QK transplant is separate v2 task.
 
 Repair is allowed only after exact transplant attempt.
 
-### 12.1 Repair order
+Repair order:
 
 ```text
 1. closed-form repair
@@ -915,7 +1263,7 @@ Repair is allowed only after exact transplant attempt.
 3. gradient repair only if 1-2 impossible
 ```
 
-### 12.2 Repair manifest
+Repair manifest:
 
 ```json
 {
@@ -998,7 +1346,9 @@ python exact_program_transplant_v1.py \
 ```text
 transplant_runs/<run_id>/
   primitive_dictionary_manifest.json
+  verified_extension_dictionary.jsonl
   synthetic_calibration_report.json
+  calibrated_thresholds.json
   teacher_program.json
   student_program_before.json
   program_diff.json
@@ -1021,11 +1371,21 @@ transplant_runs/<run_id>/
 {
   "mode": "same_checkpoint_roundtrip",
   "closure_level": "circuit_target",
-  "status": "CIRCUIT_TARGET_PROGRAM_CLOSED",
+  "status": "EXTENDED_TARGET_SPECIFIC_PROGRAM_CLOSED",
 
-  "dictionary_source": "analytic_only",
-  "dictionary_learned_from_checkpoint": false,
-  "dictionary_learned_from_training_data": false,
+  "base_dictionary_level": "analytic_base_dictionary",
+  "extension_dictionary_level": "verified_extension_dictionary",
+  "extension_dictionary_used": true,
+  "unpromoted_extension_used": true,
+  "universal_claim_allowed": false,
+
+  "dictionary_source": "analytic_base_plus_verified_extension",
+  "dictionary_learned_from_checkpoint_as_base": false,
+  "dictionary_learned_from_training_data_as_base": false,
+
+  "thresholds_loaded_from": "calibrated_thresholds.json",
+  "thresholds_recomputed_in_real_run": false,
+  "thresholds_frozen": true,
 
   "decode_status": "typed_program",
   "raw_weight_passthrough_used": false,
@@ -1072,6 +1432,7 @@ op_type_recall >= 0.95
 false_birth_rate <= 0.02
 roundtrip_error <= 1e-5
 raw_passthrough_used = false
+thresholds_written_to_calibrated_thresholds_json = true
 ```
 
 ### 16.2 Same-checkpoint
@@ -1080,6 +1441,7 @@ PASS if:
 
 ```text
 synthetic_calibration_passed = true
+thresholds_loaded_from calibrated_thresholds.json
 head_pass_rate = 1.0
 typed_coverage >= 0.95 per head
 max_head_error <= closure_tol
@@ -1118,6 +1480,7 @@ head_config compatible
 basis compatibility explicit
 structural_match_rate >= threshold
 no fuzzy matching
+no unpromoted Level 1 extension as universal primitive
 ```
 
 ---
@@ -1132,21 +1495,21 @@ Order:
 1. program_dsl_v1.py
 2. analytic_primitives_v1.py
 3. synthetic_program_roundtrip_v1.py
-4. qwen_program_decode_v1.py
-5. qwen_program_encode_v1.py
-6. exact_program_transplant_v1.py same_checkpoint_roundtrip
-7. qwen_full_replay_closure_v1.py
-8. same_family_transplant
-9. cross_model_structural_diff
-10. direct transplant only if structural match exists
-11. minimal residual repair
+4. freeze calibrated_thresholds.json
+5. qwen_program_decode_v1.py with Level 0 analytic base
+6. qwen_program_encode_v1.py to circuit target
+7. exact_program_transplant_v1.py same_checkpoint_roundtrip Level 0
+8. enable Level 1 verified_extension_dictionary if residual remains
+9. qwen_full_replay_closure_v1.py
+10. same_family_transplant
+11. cross_model_structural_diff
+12. direct transplant only if structural match exists
+13. minimal residual repair
 ```
 
 ---
 
 ## 18. AGENT RULES
-
-Put this block into AGENTS.md or task prompt:
 
 ```text
 Exact Program Transplant Doctrine:
@@ -1155,16 +1518,23 @@ Approximate ML methods are diagnostics/fallback only.
 The main path is:
 decode -> typed program -> structural diff -> structural translation -> encode -> closure.
 
-Do not use KL, coefficient L2, alpha sweep, LoRA/SVD fitting, learned dictionaries,
+Base dictionary is analytic-only.
+Self-expanding dictionary is allowed only as verified_extension_dictionary.
+It must be target-specific, typed, heldout-verified, threshold-frozen, and never silently promoted to base dictionary.
+Universal dictionary requires explicit promotion evidence.
+
+Do not use KL, coefficient L2, alpha sweep, LoRA/SVD fitting, learned base dictionaries,
 Procrustes/CCA, or gradient descent as the main transfer mechanism.
 
-Primitive dictionaries must be analytic, not learned from target checkpoints.
+Primitive dictionaries must report their level:
+analytic_base_dictionary | verified_extension_dictionary | universal_promoted_dictionary.
+
 Fields and conditions must match by exact enum/string equality or explicit alias table.
 Raw weight passthrough is rejected.
 PASS is per-head/per-layer; averages cannot hide failed heads.
 Manifest must report closure_level: circuit_target | weights | full_forward_logits.
 Cross-model head/KV mismatch blocks direct transplant.
-If exact closure fails, report missing primitive/residual; do not hide failure behind approximate fitting.
+If exact closure fails, report the missing primitive/residual. Do not hide failure behind approximate fitting.
 ```
 
 ---
